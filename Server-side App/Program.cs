@@ -16,6 +16,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 //Get ACS Connection String from appsettings.json
 var acsConnectionString = builder.Configuration.GetValue<string>("AcsConnectionString");
+var weatherApiKey = builder.Configuration.GetValue<string>("WeatherApiKey");
 ArgumentNullException.ThrowIfNullOrEmpty(acsConnectionString);
 
 //Call Automation Client
@@ -315,10 +316,12 @@ async Task<string> GetChatCompletionsAsync(string systemPrompt, string userPromp
     // var response_content = response.Value.Choices[0].Message.Content;
 
     // Definition of Function Calling
-    FunctionDefinition getWeatherFuntionDefinition = GetWeatherFunction.GetFunctionDefinition();
-    FunctionDefinition getCapitalFuntionDefinition = GetCapitalFunction.GetFunctionDefinition();
-    chatCompletionsOptions.Functions.Add(getWeatherFuntionDefinition);
-    chatCompletionsOptions.Functions.Add(getCapitalFuntionDefinition);
+    FunctionDefinition getMicrosoftSearchApi = MicrosoftSearchApiFunction.GetFunctionDefinition();
+    FunctionDefinition getCurrentTimeFunctionDefinition = GetCurrentTimeFunction.GetFunctionDefinition();
+    FunctionDefinition getWeatherFunctionDefinition = GetWeatherFunction.GetFunctionDefinition();
+    chatCompletionsOptions.Functions.Add(getMicrosoftSearchApi);
+    chatCompletionsOptions.Functions.Add(getCurrentTimeFunctionDefinition);
+    chatCompletionsOptions.Functions.Add(getWeatherFunctionDefinition);
 
     response = await ai_client.GetChatCompletionsAsync(builder.Configuration.GetValue<string>("AzureOpenAIDeploymentModelName"), chatCompletionsOptions);
 
@@ -330,12 +333,47 @@ async Task<string> GetChatCompletionsAsync(string systemPrompt, string userPromp
         // Add message as a history.
         chatCompletionsOptions.Messages.Add(responseChoice.Message);
 
-        if (responseChoice.Message.FunctionCall.Name == GetWeatherFunction.Name)
+        if (responseChoice.Message.FunctionCall.Name == MicrosoftSearchApiFunction.Name)
         {
+            Console.WriteLine($"呼び出す関数: {MicrosoftSearchApiFunction.Name}");
+            string unvalidatedArguments = responseChoice.Message.FunctionCall.Arguments;
+
+            Console.WriteLine($"引数: {unvalidatedArguments}");
+            SearchInput input = JsonSerializer.Deserialize<SearchInput>(unvalidatedArguments,
+                    new JsonSerializerOptions() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!;
+            Console.WriteLine($"インプット: {input}");
+            var functionResultData = CallMicrosoftSearchAsync(input);
+            var functionResponseMessage = new ChatMessage(
+                ChatRole.Function,
+                JsonSerializer.Serialize(
+                    functionResultData,
+                    new JsonSerializerOptions() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            functionResponseMessage.Name = MicrosoftSearchApiFunction.Name;
+            chatCompletionsOptions.Messages.Add(functionResponseMessage);
+        } else if (responseChoice.Message.FunctionCall.Name == GetCurrentTimeFunction.Name) // Handle the time function call
+        {
+            Console.WriteLine($"呼び出す関数: {GetCurrentTimeFunction.Name}");
+            string unvalidatedArguments = responseChoice.Message.FunctionCall.Arguments;
+            Console.WriteLine($"引数: {unvalidatedArguments}");
+            TimeInput input = JsonSerializer.Deserialize<TimeInput>(unvalidatedArguments,
+                    new JsonSerializerOptions() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!;
+            Console.WriteLine($"インプット: {input}");
+            var functionResultData = GetCurrentTimeFunction.GetTime(input.Location);
+            var functionResponseMessage = new ChatMessage(
+                ChatRole.Function,
+                JsonSerializer.Serialize(
+                    functionResultData,
+                    new JsonSerializerOptions() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            functionResponseMessage.Name = GetCurrentTimeFunction.Name;
+            chatCompletionsOptions.Messages.Add(functionResponseMessage);
+        } else if (responseChoice.Message.FunctionCall.Name == GetWeatherFunction.Name)
+        {
+            Console.WriteLine($"呼び出す関数: {GetWeatherFunction.Name}");
             string unvalidatedArguments = responseChoice.Message.FunctionCall.Arguments;
             WeatherInput input = JsonSerializer.Deserialize<WeatherInput>(unvalidatedArguments,
                     new JsonSerializerOptions() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!;
-            var functionResultData = GetWeatherFunction.GetWeather(input.Location, input.Unit);
+            Console.WriteLine($"引数: {unvalidatedArguments}");
+            var functionResultData = GetWeatherFunction.GetWeather(input.Location, weatherApiKey);
             var functionResponseMessage = new ChatMessage(
                 ChatRole.Function,
                 JsonSerializer.Serialize(
@@ -344,6 +382,8 @@ async Task<string> GetChatCompletionsAsync(string systemPrompt, string userPromp
             functionResponseMessage.Name = GetWeatherFunction.Name;
             chatCompletionsOptions.Messages.Add(functionResponseMessage);
         }
+
+        Console.WriteLine($"Function call: {chatCompletionsOptions.Messages}");
 
         response = await ai_client.GetChatCompletionsAsync(
             deploymentOrModelName: builder.Configuration.GetValue<string>("AzureOpenAIDeploymentModelName"),
@@ -356,6 +396,25 @@ async Task<string> GetChatCompletionsAsync(string systemPrompt, string userPromp
     var response_content = responseChoice.Message.Content;
 
     return response_content;
+}
+
+async Task<string> CallMicrosoftSearchAsync(SearchInput input)
+{
+    // エンドポイントとHttpClientを設定
+    var endpoint = builder.Configuration.GetValue<string>("FunctionsEndpoint");
+    var httpClient = new HttpClient();
+
+    // inputオブジェクトをJSONにシリアル化
+    var jsonContent = JsonSerializer.Serialize(input);
+    var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
+
+    // POSTリクエストを実行
+    var httpResponse = await httpClient.PostAsync(endpoint, httpContent);
+
+    // 応答をチェックし、応答コンテンツを返す
+    httpResponse.EnsureSuccessStatusCode();
+    var responseContent = await httpResponse.Content.ReadAsStringAsync();
+    return responseContent;
 }
 
 async Task HandleRecognizeAsync(CallMedia callConnectionMedia, string callerId, string message)
