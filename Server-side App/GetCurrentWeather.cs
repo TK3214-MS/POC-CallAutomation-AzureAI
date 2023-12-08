@@ -37,7 +37,6 @@ public class GetWeatherFunction
     static public async Task<WeatherInfo> GetWeather(string location, string apiKey)
     {
         var httpClient = new HttpClient();
-        // var apiKey = "52672d6ded006fcc19edddad843d52b4";
         var baseUrl = $"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={apiKey}&lang=ja&units=metric";
 
         Console.WriteLine($"Calling weather API with URL: {baseUrl}");
